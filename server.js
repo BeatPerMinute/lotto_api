@@ -88,11 +88,9 @@ app.get('/api/lotto/:date', async (req, res) => {
     }
 });
 
-// ลบคำสั่ง app.listen(...) ของเดิมทิ้ง แล้วใส่โค้ดนี้แทนครับ
 if (process.env.NODE_ENV !== 'production') {
     app.listen(PORT, () => {
-        console.log(`🚀 API Server เปิดทำงานในเครื่อง Local แล้ว!`);
-        console.log(`👉 http://localhost:${PORT}/api/lotto/02052569`);
+        console.log(`🚀 API Server เปิดทำงานใน Local แล้ว!`);
     });
 }
 
