@@ -8,24 +8,25 @@ async function scrapeLotto(dateStr) {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/110.0.0.0 Safari/537.36' }
         });
         const $ = cheerio.load(data);
-        
-        // 1. ลองดึงเลขรางวัลจาก Class หลักของ Sanook
-        let mainNumbers = $('.lotto-check__number-main').map((i, el) => $(el).text().trim()).get();
 
-        // 2. ถ้าดึงไม่ได้ (งวดเก่ามาก) ให้ลองดึงจากโครงสร้างตารางหรือ Strong
-        if (mainNumbers.length === 0) {
-            // ดึงเลข 6 หลักจากรางวัลที่ 1 (กรณีโครงสร้างเก่า)
-            const p1 = $('.lotto-check__prize-item--prize1 strong').text().trim() || 
-                       $('strong:contains("รางวัลที่ 1")').next().text().trim();
-            const s2 = $('.lotto-check__prize-item--two strong').text().trim() ||
-                       $('strong:contains("เลขท้าย 2 ตัว")').next().text().trim();
-            
-            if (p1) mainNumbers = [p1, "", "", "", "", s2]; // เติมโครงสร้างหลอกไว้ก่อน
-        }
+        // --- ฟังก์ชันช่วยดึงเลขรางวัลจากข้อความหัวข้อ ---
+        const findByText = (text) => {
+            return $(`strong:contains("${text}")`).closest('.lotto-check__prize-item').find('strong').last().text().trim() ||
+                   $(`span:contains("${text}")`).next().text().trim() ||
+                   $(`strong:contains("${text}")`).parent().find('b').text().trim();
+        };
 
-        const prize1 = mainNumbers[0] || "รอผล";
+        // ดึงรางวัลที่ 1
+        let p1 = $('.lotto-check__number-main').eq(0).text().trim() || findByText("รางวัลที่ 1");
         
-        // ตรวจสอบความถูกต้อง: รางวัลที่ 1 ต้องมี 6 หลัก และไม่ใช่คำว่า "รอผล"
+        // ดึงเลขท้าย 2 ตัว
+        let s2 = $('.lotto-check__number-main').last().text().trim() || findByText("เลขท้าย 2 ตัว");
+
+        // ดึงเลขหน้า/เลขท้าย 3 ตัว
+        // สุ่มดึงจาก Class หลักก่อน ถ้าไม่ได้ให้ใส่ค่าว่าง
+        const allMain = $('.lotto-check__number-main').map((i, el) => $(el).text().trim()).get();
+        
+        const prize1 = p1 || "รอผล";
         const isCompleted = prize1.length === 6 && prize1 !== "รอผล";
 
         return {
@@ -33,13 +34,14 @@ async function scrapeLotto(dateStr) {
             process_status: isCompleted ? "completed" : "partial",
             prizes: {
                 prize_1: prize1,
-                prefix_3: [mainNumbers[1] || "---", mainNumbers[2] || "---"],
-                suffix_3: [mainNumbers[3] || "---", mainNumbers[4] || "---"],
-                suffix_2: mainNumbers[5] || "รอผล",
+                prefix_3: [allMain[1] || "---", allMain[2] || "---"],
+                suffix_3: [allMain[3] || "---", allMain[4] || "---"],
+                suffix_2: s2 || "รอผล",
             },
             lastUpdated: new Date()
         };
     } catch (error) {
+        console.error("Scrape Error:", error.message);
         return null;
     }
 }
