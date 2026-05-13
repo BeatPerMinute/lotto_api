@@ -9,29 +9,18 @@ async function scrapeLotto(dateStr) {
         });
         const $ = cheerio.load(data);
 
-        const extractNumber = (text) => {
-            if (!text) return "";
-            return text.replace(/\D/g, ""); 
+        const extractNumber = (text) => text ? text.replace(/\D/g, "") : "";
+
+        // ดึงเลขรางวัลหลัก (1, หน้า3, ท้าย3, ท้าย2)
+        let main = $('.lotto-check__number-main').map((i, el) => extractNumber($(el).text())).get();
+
+        // ฟังก์ชันดึงรางวัลที่ 2-5
+        const getPrizeList = (prizeTitle) => {
+            return $(`h3:contains("${prizeTitle}")`).next('.lotto-check__prize-list')
+                   .find('.lotto-check__number').map((i, el) => extractNumber($(el).text())).get();
         };
 
-        // --- หัวใจสำคัญ: ดึงเลขจาก class lotto-check__number-main ---
-        // ปกติจะมี 6 ตำแหน่ง: [0]รางวัลที่ 1, [1-2]เลขหน้า 3, [3-4]เลขท้าย 3, [5]เลขท้าย 2
-        let numbers = $('.lotto-check__number-main').map((i, el) => extractNumber($(el).text())).get();
-
-        // ถ้าหา class ข้างบนไม่เจอ (กรณีงวดเก่ามาก) ให้หาจาก <strong> ที่มีตัวเลข 2-6 หลัก
-        if (numbers.length === 0) {
-            $('strong').each((i, el) => {
-                const txt = extractNumber($(el).text());
-                if (txt.length >= 2 && txt.length <= 6 && txt !== "6000000" && txt !== "4000" && txt !== "2000") {
-                    numbers.push(txt);
-                }
-            });
-        }
-
-        const p1 = numbers[0] || "";
-        const s2 = numbers[5] || numbers[numbers.length - 1] || ""; // เลขท้าย 2 ตัวมักอยู่ท้ายสุด
-
-        // ตรวจสอบ: รางวัลที่ 1 ต้องมี 6 หลัก และไม่ใช่ตัวเลขเงินรางวัล
+        const p1 = main[0] || "";
         const isCompleted = p1.length === 6 && p1 !== "6000000";
 
         return {
@@ -39,9 +28,14 @@ async function scrapeLotto(dateStr) {
             process_status: isCompleted ? "completed" : "partial",
             prizes: {
                 prize_1: isCompleted ? p1 : "รอผล",
-                prefix_3: [numbers[1] || "---", numbers[2] || "---"],
-                suffix_3: [numbers[3] || "---", numbers[4] || "---"],
-                suffix_2: s2.length === 2 ? s2 : "รอผล",
+                prefix_3: [main[1] || "", main[2] || ""],
+                suffix_3: [main[3] || "", main[4] || ""],
+                suffix_2: main[5] || "",
+                prize_2: getPrizeList("รางวัลที่ 2"),
+                prize_3: getPrizeList("รางวัลที่ 3"),
+                prize_4: getPrizeList("รางวัลที่ 4"),
+                prize_5: getPrizeList("รางวัลที่ 5"),
+                nearby_1: getPrizeList("รางวัลข้างเคียงรางวัลที่ 1")
             },
             lastUpdated: new Date()
         };
