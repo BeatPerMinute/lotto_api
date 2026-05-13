@@ -1,45 +1,48 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 
-async function scrapeSmartLotto(dateUrl) {
+async function scrapeLotto(dateStr) {
+    const url = `https://news.sanook.com/lotto/check/${dateStr}/`;
     try {
-        console.log(`กำลังวิ่งไปขูดข้อมูลที่: ${dateUrl}...`);
-        
-        const { data } = await axios.get(dateUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36' }
+        const { data } = await axios.get(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36' }
         });
-        
         const $ = cheerio.load(data);
-        
-        // ดึงวันที่ (เอาเฉพาะข้อความก่อนเครื่องหมาย -)
-        const dateText = $('title').text().trim().split('-')[0].trim(); 
+        const checkContent = $('body').text();
 
-        // ดึงกล่องตัวเลขทั้งหมดในโซน Highlight มาเก็บไว้ใน Array
-        const allNums = $('.lotto__number');
+        if (checkContent.includes('ไม่พบหน้าเว็บ') || checkContent.includes('ยังไม่มีผลรางวัล')) return null;
 
-        // หยิบแยกตามลำดับ (Index) ที่เราถอดรหัสมาได้
-        const firstPrize = [ $('.lotto__number--first').text().trim() ]; // รางวัลที่ 1 มีคลาสเฉพาะตัว
-        const last3f = [ allNums.eq(1).text().trim(), allNums.eq(2).text().trim() ]; // หน้า 3
-        const last3b = [ allNums.eq(3).text().trim(), allNums.eq(4).text().trim() ]; // ท้าย 3
-        const last2 = [ allNums.eq(5).text().trim() ]; // ท้าย 2
-
-        const resultJSON = {
-            date: dateText,
-            prizes: [
-                { name: "รางวัลที่ 1", reward: "6000000", number: firstPrize },
-                { name: "รางวัลเลขหน้า 3 ตัว", reward: "4000", number: last3f },
-                { name: "รางวัลเลขท้าย 3 ตัว", reward: "4000", number: last3b },
-                { name: "รางวัลเลขท้าย 2 ตัว", reward: "2000", number: last2 }
-            ]
+        // ฟังก์ชันช่วยดึงเลขรางวัลตามลำดับ
+        const getNumbers = (selector) => {
+            return $(selector).map((i, el) => $(el).text().trim()).get().filter(n => n !== "");
         };
 
-        console.log("🎉 ดูดข้อมูลสำเร็จเป๊ะๆ! นี่คือผลลัพธ์:");
-        console.log(JSON.stringify(resultJSON, null, 2));
+        // ดึงรางวัลหลัก (รางวัลที่ 1, เลขหน้า, เลขท้าย)
+        const mainNumbers = getNumbers('.lotto-check__number-main'); 
+        
+        // วิเคราะห์สถานะ (ถ้ามีเลขครบ 6 หลักในรางวัลที่ 1 แสดงว่าเริ่มออกแล้ว)
+        const prize1 = mainNumbers[0] || "รอผล";
+        const isCompleted = mainNumbers.length >= 6 && !mainNumbers.includes("รอผล");
 
+        const resultData = {
+            date: dateStr,
+            process_status: isCompleted ? "completed" : "partial",
+            prizes: {
+                prize_1: prize1,
+                prefix_3: [mainNumbers[1], mainNumbers[2]],
+                suffix_3: [mainNumbers[3], mainNumbers[4]],
+                suffix_2: mainNumbers[5] || "รอผล",
+                // รางวัลที่ 2-5 (ถ้าต้องการเพิ่ม สามารถเขียน selector ดึงต่อได้ที่นี่)
+                all_prizes_raw: mainNumbers 
+            },
+            lastUpdated: new Date()
+        };
+
+        return resultData;
     } catch (error) {
-        console.error("❌ เกิดข้อผิดพลาด:", error.message);
+        console.error(`❌ Scraper Error (${dateStr}):`, error.message);
+        return null;
     }
 }
 
-// ทดสอบงวด 1 เมษายน 2567
-scrapeSmartLotto('https://news.sanook.com/lotto/check/01042567/');
+module.exports = { scrapeLotto };
