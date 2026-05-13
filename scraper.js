@@ -9,38 +9,39 @@ async function scrapeLotto(dateStr) {
         });
         const $ = cheerio.load(data);
 
-        // ฟังก์ชันช่วยดึงเฉพาะตัวเลขออกจากข้อความ
         const extractNumber = (text) => {
             if (!text) return "";
-            return text.replace(/\D/g, ""); // ลบทุกอย่างที่ไม่ใช่ตัวเลขออก
+            return text.replace(/\D/g, ""); 
         };
 
-        const findByText = (text) => {
-            return $(`strong:contains("${text}")`).closest('.lotto-check__prize-item').find('strong').last().text().trim() ||
-                   $(`span:contains("${text}")`).next().text().trim();
-        };
+        // --- หัวใจสำคัญ: ดึงเลขจาก class lotto-check__number-main ---
+        // ปกติจะมี 6 ตำแหน่ง: [0]รางวัลที่ 1, [1-2]เลขหน้า 3, [3-4]เลขท้าย 3, [5]เลขท้าย 2
+        let numbers = $('.lotto-check__number-main').map((i, el) => extractNumber($(el).text())).get();
 
-        // ดึงเลขรางวัลและกรองเอาเฉพาะตัวเลข
-        let rawP1 = $('.lotto-check__number-main').eq(0).text().trim() || findByText("รางวัลที่ 1");
-        let p1 = extractNumber(rawP1);
-        
-        let rawS2 = $('.lotto-check__number-main').last().text().trim() || findByText("เลขท้าย 2 ตัว");
-        let s2 = extractNumber(rawS2);
+        // ถ้าหา class ข้างบนไม่เจอ (กรณีงวดเก่ามาก) ให้หาจาก <strong> ที่มีตัวเลข 2-6 หลัก
+        if (numbers.length === 0) {
+            $('strong').each((i, el) => {
+                const txt = extractNumber($(el).text());
+                if (txt.length >= 2 && txt.length <= 6 && txt !== "6000000" && txt !== "4000" && txt !== "2000") {
+                    numbers.push(txt);
+                }
+            });
+        }
 
-        // ดึงเลข 3 ตัว
-        const allMain = $('.lotto-check__number-main').map((i, el) => extractNumber($(el).text().trim())).get();
-        
-        // ตรวจสอบความถูกต้อง (ต้องมี 6 หลัก)
-        const isCompleted = p1.length === 6;
+        const p1 = numbers[0] || "";
+        const s2 = numbers[5] || numbers[numbers.length - 1] || ""; // เลขท้าย 2 ตัวมักอยู่ท้ายสุด
+
+        // ตรวจสอบ: รางวัลที่ 1 ต้องมี 6 หลัก และไม่ใช่ตัวเลขเงินรางวัล
+        const isCompleted = p1.length === 6 && p1 !== "6000000";
 
         return {
             date: dateStr,
             process_status: isCompleted ? "completed" : "partial",
             prizes: {
-                prize_1: p1 || "รอผล",
-                prefix_3: [allMain[1] || "---", allMain[2] || "---"],
-                suffix_3: [allMain[3] || "---", allMain[4] || "---"],
-                suffix_2: s2 || "รอผล",
+                prize_1: isCompleted ? p1 : "รอผล",
+                prefix_3: [numbers[1] || "---", numbers[2] || "---"],
+                suffix_3: [numbers[3] || "---", numbers[4] || "---"],
+                suffix_2: s2.length === 2 ? s2 : "รอผล",
             },
             lastUpdated: new Date()
         };
