@@ -1,32 +1,100 @@
-// (โค้ดส่วนบนคงเดิม... จนถึงส่วน Admin API)
+require('dotenv').config();
+const express = require('express');
+const mongoose = require('mongoose');
+const axios = require('axios');
+const cheerio = require('cheerio');
+const cors = require('cors');
+const { scrapeLotto } = require('./scraper');
 
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// --- MongoDB Setup ---
+mongoose.connect(process.env.MONGODB_URI)
+    .then(() => console.log('✅ Connected to MongoDB Atlas'))
+    .catch(err => console.error('❌ MongoDB Connection Error:', err));
+
+const lottoSchema = new mongoose.Schema({
+    date: { type: String, unique: true }, // Format: DDMMYYYY
+    data: Object,
+    process_status: String, // 'completed' หรือ 'partial'
+    lastUpdated: { type: Date, default: Date.now }
+});
+
+const Lotto = mongoose.model('Lotto', lottoSchema);
+
+// --- Memory Cache ---
+const historicalCache = new Map();
 let backfillStatus = { active: false, current: "", total: 0, completed: 0, message: "" };
 
-app.get('/api/admin/start-heavy-backfill', async (req, res) => {
-    const adminPassword = req.query.password;
-    if (adminPassword !== "MySecret123") return res.status(401).send("Wrong Password");
-    if (backfillStatus.active) return res.json({ message: "บอทกำลังรันอยู่...", status: backfillStatus });
+// --- API Routes ---
 
-    backfillStatus.active = true;
-    backfillStatus.message = "กำลังกวาดวันที่จากทุกหน้าของ Sanook...";
-    
+// 1. ดึงข้อมูลหวยรายงวด (สำหรับแอป Flutter)
+app.get('/api/lotto/:date', async (req, res) => {
+    const { date } = req.params;
+
+    // เช็คใน Cache ก่อน
+    if (historicalCache.has(date)) {
+        return res.json(historicalCache.get(date));
+    }
+
     try {
-        let allUniqueDates = [];
-        // วนลูปกวาดหน้าสารบัญ 1-10 (หรือปรับเพิ่มได้ถ้าอยากย้อนไปไกลกว่า 5-6 ปี)
-        for (let page = 1; page <= 10; page++) {
-            const listUrl = `https://news.sanook.com/lotto/archive/page/${page}/`;
-            const { data } = await axios.get(listUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-            const $ = cheerio.load(data);
-            
-            $('a[href*="/lotto/check/"]').each((i, el) => {
-                const url = $(el).attr('href');
-                const match = url.match(/check\/(\d+)\//);
-                if (match) allUniqueDates.push(match[1]);
-            });
-            console.log(`กวาดหน้า ${page} เสร็จสิ้น...`);
+        // เช็คใน Database
+        let record = await Lotto.findOne({ date });
+        
+        if (record && record.process_status === 'completed') {
+            historicalCache.set(date, record.data);
+            return res.json(record.data);
         }
 
-        const uniqueDates = [...new Set(allUniqueDates)];
+        // ถ้าไม่มีใน DB ให้ไปขูดสด
+        const result = await scrapeLotto(date);
+        if (result) {
+            await Lotto.findOneAndUpdate(
+                { date },
+                { data: result, process_status: result.process_status },
+                { upsert: true }
+            );
+            historicalCache.set(date, result);
+            return res.json(result);
+        }
+
+        res.status(404).json({ message: "ไม่พบข้อมูลหวยงวดนี้" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 2. สั่งเริ่มขูดข้อมูลแบบ "ล้างบาง" (ย้อนหลัง 10 หน้า)
+app.get('/api/admin/start-heavy-backfill', async (req, res) => {
+    const adminPassword = req.query.password;
+    if (adminPassword !== "MySecret123") return res.status(401).send("Unauthorized");
+    if (backfillStatus.active) return res.json({ message: "บอทกำลังรันอยู่", status: backfillStatus });
+
+    backfillStatus.active = true;
+    backfillStatus.message = "กำลังกวาดรายชื่อวันที่จากหน้าสารบัญ...";
+    
+    try {
+        let allDates = [];
+        // วนลูปกวาด 10 หน้าแรก (ประมาณ 150-200 งวด)
+        for (let p = 1; p <= 10; p++) {
+            const archiveUrl = `https://news.sanook.com/lotto/archive/page/${p}/`;
+            const { data } = await axios.get(archiveUrl, { 
+                headers: { 'User-Agent': 'Mozilla/5.0' },
+                timeout: 10000 
+            });
+            const $ = cheerio.load(data);
+
+            $('a[href*="/lotto/check/"]').each((i, el) => {
+                const href = $(el).attr('href');
+                const match = href.match(/check\/(\d{8})\//);
+                if (match) allDates.push(match[1]);
+            });
+            console.log(`กวาดหน้าสารบัญ ${p} สำเร็จ`);
+        }
+
+        const uniqueDates = [...new Set(allDates)];
         backfillStatus.total = uniqueDates.length;
         backfillStatus.completed = 0;
         backfillStatus.message = "เริ่มขูดข้อมูลลง Database ทีละงวด...";
@@ -35,7 +103,7 @@ app.get('/api/admin/start-heavy-backfill', async (req, res) => {
             if (uniqueDates.length === 0) {
                 clearInterval(worker);
                 backfillStatus.active = false;
-                backfillStatus.message = "ภารกิจเสร็จสิ้น! ขูดครบทุกหน้าแล้ว";
+                backfillStatus.message = "ภารกิจเสร็จสมบูรณ์!";
                 return;
             }
 
@@ -44,14 +112,44 @@ app.get('/api/admin/start-heavy-backfill', async (req, res) => {
 
             const result = await scrapeLotto(targetDate);
             if (result) {
-                await Lotto.findOneAndUpdate({ date: targetDate }, { data: result, process_status: result.process_status }, { upsert: true });
+                await Lotto.findOneAndUpdate(
+                    { date: targetDate }, 
+                    { data: result, process_status: result.process_status }, 
+                    { upsert: true }
+                );
                 backfillStatus.completed++;
             }
-        }, 5000); // เว้น 5 วินาที เพื่อความปลอดภัยสูงสุด (ไม่โดนแบนแน่นอน)
+        }, 5000); // หน่วง 5 วินาทีต่อหน้า เพื่อความปลอดภัย
 
-        res.json({ message: "บอทเริ่มงานขยายผลแล้ว ปิดคอมไปนอนได้เลย!", total_dates: uniqueDates.length });
+        res.json({ 
+            message: "เริ่มขูดข้อมูลแบบจัดเต็ม 10 หน้าสารบัญ! ปิดคอมได้เลย", 
+            total_found: uniqueDates.length 
+        });
+
     } catch (err) {
         backfillStatus.active = false;
-        res.status(500).send("Error listing dates");
+        res.status(500).json({ error: err.message });
     }
+});
+
+// 3. ดูสถานะบอท
+app.get('/api/admin/backfill-status', (req, res) => {
+    res.json(backfillStatus);
+});
+
+// 4. ดึงรายชื่อวันที่ทั้งหมดที่มีใน DB (สำหรับเมนูเลือกงวดใน Flutter)
+app.get('/api/lotto-list', async (req, res) => {
+    try {
+        const list = await Lotto.find({}, 'date').sort({ date: -1 });
+        const dates = list.map(item => item.date);
+        res.json(dates);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- Start Server ---
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`🚀 Server is running on port ${PORT}`);
 });
